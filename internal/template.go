@@ -2,25 +2,22 @@ package hssm
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 	"strings"
 	"text/template"
 
-	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 
 	"github.com/Masterminds/sprig"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
-	
+
 	"github.com/aws/aws-sdk-go/service/ssm"
 	"github.com/aws/aws-sdk-go/service/ssm/ssmiface"
 	"github.com/aws/aws-sdk-go/service/sts"
-
 )
 
 var account_profiles = map[string]string{
@@ -97,7 +94,7 @@ func resolveSSMParameter(ssmPath string, options []string) (*string, error) {
 	if lambda {
 		session = getLambdaSession(opts["account"])
 	} else {
-		session = getLocalSession(opts["account"])		
+		session = getLocalSession(opts["account"])
 	}
 
 	var svc ssmiface.SSMAPI
@@ -135,9 +132,12 @@ func handleOptions(options []string) (map[string]string, error) {
 }
 
 func getLocalSession(account string) *session.Session {
+	fmt.Print("NEW SESSION")
+
+	fmt.Print(account_profiles[account])
 	s := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState:       session.SharedConfigEnable,
-		Profile:                 account_profiles["account"],
+		Profile:                 account_profiles[account],
 		AssumeRoleTokenProvider: stscreds.StdinTokenProvider,
 	}))
 	return s
@@ -164,10 +164,10 @@ func getAssumedSession(baseSess *session.Session, roleArn, region string) (*sess
 	})
 
 	return session.NewSession(&aws.Config{
-		Credentials:   credentials.NewStaticCredentials(
+		Credentials: credentials.NewStaticCredentials(
 			*assumedRole.Credentials.AccessKeyId,
 			*assumedRole.Credentials.SecretAccessKey,
 			*assumedRole.Credentials.SessionToken),
-		Region:        aws.String(region),
+		Region: aws.String(region),
 	})
 }
