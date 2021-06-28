@@ -25,6 +25,10 @@ var account_profiles = map[string]string{
 	"production": "default",
 }
 
+var current_account string
+
+var current_session *session.Session
+
 // WriteFileD dumps a given content on the file with path `targetDir/fileName`.
 func WriteFileD(fileName string, targetDir string, content string) error {
 	targetFilePath := targetDir + "/" + fileName
@@ -88,20 +92,21 @@ func resolveSSMParameter(ssmPath string, options []string) (*string, error) {
 		defaultValue = &optDefaultValue
 	}
 
-	var session *session.Session
-
-	_, lambda := os.LookupEnv("AWS_LAMBDA_FUNCTION_NAME")
-	if lambda {
-		session = getLambdaSession(opts["account"])
-	} else {
-		session = getLocalSession(opts["account"])
+	if opts["account"] != current_account {
+		current_account = opts["account"]
+		_, lambda := os.LookupEnv("AWS_LAMBDA_FUNCTION_NAME")
+		if lambda {
+			current_session = getLambdaSession(opts["account"])
+		} else {
+			current_session = getLocalSession(opts["account"])
+		}
 	}
 
 	var svc ssmiface.SSMAPI
 	if region, exists := opts["region"]; exists {
-		svc = ssm.New(session, aws.NewConfig().WithRegion(region))
+		svc = ssm.New(current_session, aws.NewConfig().WithRegion(region))
 	} else {
-		svc = ssm.New(session)
+		svc = ssm.New(current_session)
 	}
 
 	return GetSSMParameter(svc, opts["prefix"]+ssmPath, defaultValue, true)
@@ -132,9 +137,6 @@ func handleOptions(options []string) (map[string]string, error) {
 }
 
 func getLocalSession(account string) *session.Session {
-	fmt.Print("NEW SESSION")
-
-	fmt.Print(account_profiles[account])
 	s := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState:       session.SharedConfigEnable,
 		Profile:                 account_profiles[account],
