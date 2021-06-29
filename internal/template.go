@@ -150,7 +150,6 @@ func getLocalSession(account string) *session.Session {
 }
 
 func getLambdaSession(account string) (*session.Session, error) {
-
 	region := os.Getenv("AWS_REGION")
 	s, err := session.NewSession(&aws.Config{
 		Region: &region,
