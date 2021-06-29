@@ -96,10 +96,14 @@ func resolveSSMParameter(ssmPath string, options []string) (*string, error) {
 		current_account = opts["account"]
 		_, lambda := os.LookupEnv("AWS_LAMBDA_FUNCTION_NAME")
 		if lambda {
-			current_session = getLambdaSession(opts["account"])
+			current_session, err = getLambdaSession(opts["account"])
 		} else {
 			current_session = getLocalSession(opts["account"])
 		}
+	}
+
+	if err != nil {
+		return nil, err
 	}
 
 	var svc ssmiface.SSMAPI
@@ -145,25 +149,35 @@ func getLocalSession(account string) *session.Session {
 	return s
 }
 
-func getLambdaSession(account string) *session.Session {
-	var s *session.Session
+func getLambdaSession(account string) (*session.Session, error) {
 
 	region := os.Getenv("AWS_REGION")
-	s, _ = session.NewSession(&aws.Config{
+	s, err := session.NewSession(&aws.Config{
 		Region: &region,
 	})
+
+	if err != nil {
+		return s, err
+	}
+
 	if account != os.Getenv("PIPELINE_ENVIRONMENT") {
 		cross_account_role_arn := os.Getenv("CROSS_ACCOUNT_ARN")
-		s, _ = getAssumedSession(s, cross_account_role_arn, region)
+		s, err = getAssumedSession(s, cross_account_role_arn, region)
 	}
-	return s
+	return s, err
 }
 
 func getAssumedSession(baseSess *session.Session, roleArn, region string) (*session.Session, error) {
 	stsSvc := sts.New(baseSess)
-	assumedRole, _ := stsSvc.AssumeRole(&sts.AssumeRoleInput{
-		RoleArn: aws.String(roleArn),
+	sessionName := "cross_account_ssm_session"
+	assumedRole, err := stsSvc.AssumeRole(&sts.AssumeRoleInput{
+		RoleArn:         aws.String(roleArn),
+		RoleSessionName: &sessionName,
 	})
+
+	if err != nil {
+		return nil, err
+	}
 
 	return session.NewSession(&aws.Config{
 		Credentials: credentials.NewStaticCredentials(
