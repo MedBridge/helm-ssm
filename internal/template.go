@@ -2,19 +2,20 @@ package hssm
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"strings"
 	"text/template"
 
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
-
 	"github.com/Masterminds/sprig"
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/session"
 
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/aws/aws-sdk-go/service/ssm"
 	"github.com/aws/aws-sdk-go/service/ssm/ssmiface"
 	"github.com/aws/aws-sdk-go/service/sts"
@@ -92,11 +93,11 @@ func resolveSSMParameter(ssmPath string, options []string) (*string, error) {
 		defaultValue = &optDefaultValue
 	}
 
+	_, lambda := os.LookupEnv(lambda_function)
 	if opts["account"] != current_account {
 		current_account = opts["account"]
-		_, lambda := os.LookupEnv("AWS_LAMBDA_FUNCTION_NAME")
 		if lambda {
-			current_session, err = getLambdaSession(opts["account"])
+			current_session, err = getLambdaSession(opts["account"], opts["region"])
 		} else {
 			current_session = getLocalSession(opts["account"])
 		}
@@ -113,7 +114,16 @@ func resolveSSMParameter(ssmPath string, options []string) (*string, error) {
 		svc = ssm.New(current_session)
 	}
 
-	return GetSSMParameter(svc, opts["prefix"]+ssmPath, defaultValue, true)
+	value, param, err := GetSSMParameter(svc, opts["prefix"]+ssmPath, defaultValue, true)
+	if err != nil {
+		return nil, err
+	}
+
+	if lambda && opts["account"] == "production" {
+		s3AuditUpload(param, current_session)
+	}
+
+	return value, nil
 }
 
 func handleOptions(options []string) (map[string]string, error) {
@@ -149,8 +159,7 @@ func getLocalSession(account string) *session.Session {
 	return s
 }
 
-func getLambdaSession(account string) (*session.Session, error) {
-	region := os.Getenv("AWS_REGION")
+func getLambdaSession(account, region string) (*session.Session, error) {
 	s, err := session.NewSession(&aws.Config{
 		Region: &region,
 	})
@@ -159,9 +168,9 @@ func getLambdaSession(account string) (*session.Session, error) {
 		return s, err
 	}
 
-	if account != os.Getenv("PIPELINE_ENVIRONMENT") {
-		cross_account_role_arn := os.Getenv("CROSS_ACCOUNT_ARN")
-		s, err = getAssumedSession(s, cross_account_role_arn, region)
+	if account != os.Getenv(pipeline_env) {
+		crossAccountRoleArn := os.Getenv(cross_account_arn)
+		s, err = getAssumedSession(s, crossAccountRoleArn, region)
 	}
 	return s, err
 }
@@ -184,5 +193,24 @@ func getAssumedSession(baseSess *session.Session, roleArn, region string) (*sess
 			*assumedRole.Credentials.SecretAccessKey,
 			*assumedRole.Credentials.SessionToken),
 		Region: aws.String(region),
+	})
+}
+
+func s3AuditUpload(param *ssm.GetParameterOutput, sess *session.Session) {
+	uploader := s3manager.NewUploader(sess)
+	image, _ := json.Marshal(param)
+
+	file := "imagetags.txt"
+	ioutil.WriteFile(file, image, 0755)
+	f, _ := os.Open(file)
+
+	bucket := "release-audit-log"
+	key := strings.TrimPrefix(*param.Parameter.Name, "/cicd/production/")
+	key = strings.Replace(key, "image_tag", *param.Parameter.Value, -1)
+
+	uploader.Upload(&s3manager.UploadInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+		Body:   f,
 	})
 }
