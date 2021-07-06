@@ -10,12 +10,12 @@ import (
 )
 
 // GetSSMParameter gets a parameter from the AWS Simple Systems Manager service.
-func GetSSMParameter(svc ssmiface.SSMAPI, name string, defaultValue *string, decrypt bool) (*string, *ssm.GetParameterOutput, error) {
+func GetSSMParameter(svc ssmiface.SSMAPI, name string, defaultValue *string, decrypt bool) (*string, error) {
 	regex := "([a-zA-Z0-9\\.\\-_/]*)"
 	r, _ := regexp.Compile(regex)
 	match := r.FindString(name)
 	if match == "" {
-		return nil, nil, fmt.Errorf("There is an invalid character in the name of the parameter: %s. It should match %s", name, regex)
+		return nil, fmt.Errorf("There is an invalid character in the name of the parameter: %s. It should match %s", name, regex)
 	}
 	// Create the request to SSM
 	getParameterInput := &ssm.GetParameterInput{
@@ -31,13 +31,13 @@ func GetSSMParameter(svc ssmiface.SSMAPI, name string, defaultValue *string, dec
 	if ok && aerr.Code() == ssm.ErrCodeParameterNotFound {
 		// Specific error code handling
 		if defaultValue != nil {
-			return defaultValue, nil, nil
+			return defaultValue, nil
 		}
-		return nil, nil, err
+		return nil, err
 	}
 	if aerr != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	return param.Parameter.Value, param, nil
+	return param.Parameter.Value, nil
 }

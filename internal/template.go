@@ -2,7 +2,6 @@ package hssm
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -15,7 +14,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/session"
 
-	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/aws/aws-sdk-go/service/ssm"
 	"github.com/aws/aws-sdk-go/service/ssm/ssmiface"
 	"github.com/aws/aws-sdk-go/service/sts"
@@ -114,13 +112,9 @@ func resolveSSMParameter(ssmPath string, options []string) (*string, error) {
 		svc = ssm.New(current_session)
 	}
 
-	value, param, err := GetSSMParameter(svc, opts["prefix"]+ssmPath, defaultValue, true)
+	value, err := GetSSMParameter(svc, opts["prefix"]+ssmPath, defaultValue, true)
 	if err != nil {
 		return nil, err
-	}
-
-	if lambda && opts["account"] == "production" {
-		s3AuditUpload(param, current_session)
 	}
 
 	return value, nil
@@ -193,24 +187,5 @@ func getAssumedSession(baseSess *session.Session, roleArn, region string) (*sess
 			*assumedRole.Credentials.SecretAccessKey,
 			*assumedRole.Credentials.SessionToken),
 		Region: aws.String(region),
-	})
-}
-
-func s3AuditUpload(param *ssm.GetParameterOutput, sess *session.Session) {
-	uploader := s3manager.NewUploader(sess)
-	image, _ := json.Marshal(param)
-
-	file := "imagetags.txt"
-	ioutil.WriteFile(file, image, 0755)
-	f, _ := os.Open(file)
-
-	bucket := "release-audit-log"
-	key := strings.TrimPrefix(*param.Parameter.Name, "/cicd/production/")
-	key = strings.Replace(key, "image_tag", *param.Parameter.Value, -1)
-
-	uploader.Upload(&s3manager.UploadInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-		Body:   f,
 	})
 }
