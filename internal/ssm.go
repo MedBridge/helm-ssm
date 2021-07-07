@@ -25,6 +25,7 @@ func GetSSMParameter(svc ssmiface.SSMAPI, name string, defaultValue *string, dec
 
 	// Get the parameter from SSM
 	param, err := svc.GetParameter(getParameterInput)
+
 	// Cast err to awserr.Error to handle specific error codes.
 	aerr, ok := err.(awserr.Error)
 	if ok && aerr.Code() == ssm.ErrCodeParameterNotFound {
@@ -37,5 +38,6 @@ func GetSSMParameter(svc ssmiface.SSMAPI, name string, defaultValue *string, dec
 	if aerr != nil {
 		return nil, err
 	}
+
 	return param.Parameter.Value, nil
 }

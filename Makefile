@@ -17,11 +17,18 @@ install: dist
 	cp -r $(DIST)/$$file/* $(HELM_PLUGIN_DIR) ;\
 	rm -rf $(DIST)/$$file
 
-.PHONY: build-lambda-tar
-build-lambda-tar:
+.PHONY: build-linux-tar
+build-linux-tar:
 	sed -i.bak 's/version:.*/version: "'$(VERSION)'"/g' plugin.yaml && rm plugin.yaml.bak
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ${HELM_PLUGIN_NAME} -ldflags $(LDFLAGS) ./cmd
 	tar -zcvf ${HELM_PLUGIN_NAME}-linux.tgz ${HELM_PLUGIN_NAME} README.md LICENSE plugin.yaml
+	rm ${HELM_PLUGIN_NAME}
+
+.PHONY: build-macos-tar
+build-macos-tar:
+	sed -i.bak 's/version:.*/version: "'$(VERSION)'"/g' plugin.yaml && rm plugin.yaml.bak
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o ${HELM_PLUGIN_NAME} -ldflags $(LDFLAGS) ./cmd
+	tar -zcvf ${HELM_PLUGIN_NAME}-macos.tgz ${HELM_PLUGIN_NAME} README.md LICENSE plugin.yaml
 	rm ${HELM_PLUGIN_NAME}
 
 .PHONY: hookInstall

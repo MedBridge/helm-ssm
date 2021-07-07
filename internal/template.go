@@ -3,7 +3,6 @@ package hssm
 import (
 	"bytes"
 	"fmt"
-	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"io/ioutil"
 	"os"
 	"strings"
@@ -11,10 +10,23 @@ import (
 
 	"github.com/Masterminds/sprig"
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/session"
+
 	"github.com/aws/aws-sdk-go/service/ssm"
 	"github.com/aws/aws-sdk-go/service/ssm/ssmiface"
+	"github.com/aws/aws-sdk-go/service/sts"
 )
+
+var account_profiles = map[string]string{
+	"staging":    "staging",
+	"production": "default",
+}
+
+var current_account string
+
+var current_session *session.Session
 
 // WriteFileD dumps a given content on the file with path `targetDir/fileName`.
 func WriteFileD(fileName string, targetDir string, content string) error {
@@ -57,9 +69,8 @@ func GetFuncMap(profile string) template.FuncMap {
 		funcMap[k] = v
 	}
 
-	awsSession := newAWSSession(profile)
 	funcMap["ssm"] = func(ssmPath string, options ...string) (string, error) {
-		optStr, err := resolveSSMParameter(awsSession, ssmPath, options)
+		optStr, err := resolveSSMParameter(ssmPath, options)
 		str := ""
 		if optStr != nil {
 			str = *optStr
@@ -69,7 +80,7 @@ func GetFuncMap(profile string) template.FuncMap {
 	return funcMap
 }
 
-func resolveSSMParameter(session *session.Session, ssmPath string, options []string) (*string, error) {
+func resolveSSMParameter(ssmPath string, options []string) (*string, error) {
 	opts, err := handleOptions(options)
 	if err != nil {
 		return nil, err
@@ -80,14 +91,33 @@ func resolveSSMParameter(session *session.Session, ssmPath string, options []str
 		defaultValue = &optDefaultValue
 	}
 
-	var svc ssmiface.SSMAPI
-	if region, exists := opts["region"]; exists {
-		svc = ssm.New(session, aws.NewConfig().WithRegion(region))
-	} else {
-		svc = ssm.New(session)
+	_, lambda := os.LookupEnv(lambda_function)
+	if opts["account"] != current_account {
+		current_account = opts["account"]
+		if lambda {
+			current_session, err = getLambdaSession(opts["account"], opts["region"])
+		} else {
+			current_session = getLocalSession(opts["account"])
+		}
 	}
 
-	return GetSSMParameter(svc, opts["prefix"]+ssmPath, defaultValue, true)
+	if err != nil {
+		return nil, err
+	}
+
+	var svc ssmiface.SSMAPI
+	if region, exists := opts["region"]; exists {
+		svc = ssm.New(current_session, aws.NewConfig().WithRegion(region))
+	} else {
+		svc = ssm.New(current_session)
+	}
+
+	value, err := GetSSMParameter(svc, opts["prefix"]+ssmPath, defaultValue, true)
+	if err != nil {
+		return nil, err
+	}
+
+	return value, nil
 }
 
 func handleOptions(options []string) (map[string]string, error) {
@@ -95,6 +125,7 @@ func handleOptions(options []string) (map[string]string, error) {
 		"required",
 		"prefix",
 		"region",
+		"account",
 	}
 	opts := map[string]string{}
 	for _, o := range options {
@@ -113,22 +144,48 @@ func handleOptions(options []string) (map[string]string, error) {
 	return opts, nil
 }
 
-func newAWSSession(profile string) *session.Session {
-	// Turn off mfa when helm-ssm is run in cicd lambda function
-	var s *session.Session
-	_, lambda := os.LookupEnv("AWS_LAMBDA_FUNCTION_NAME")
-	if lambda {
-		region := os.Getenv("AWS_REGION")
-		s, _ = session.NewSession(&aws.Config{
-			Region: &region,
-		})
-	} else {
-		s = session.Must(session.NewSessionWithOptions(session.Options{
-			SharedConfigState:       session.SharedConfigEnable,
-			Profile:                 profile,
-			AssumeRoleTokenProvider: stscreds.StdinTokenProvider,
-		}))
+func getLocalSession(account string) *session.Session {
+	s := session.Must(session.NewSessionWithOptions(session.Options{
+		SharedConfigState:       session.SharedConfigEnable,
+		Profile:                 account_profiles[account],
+		AssumeRoleTokenProvider: stscreds.StdinTokenProvider,
+	}))
+	return s
+}
+
+func getLambdaSession(account, region string) (*session.Session, error) {
+	s, err := session.NewSession(&aws.Config{
+		Region: &region,
+	})
+
+	if err != nil {
+		return s, err
 	}
 
-	return s
+	if account != os.Getenv(pipeline_env) {
+		crossAccountRoleArn := os.Getenv(cross_account_arn)
+		s, err = getAssumedSession(s, crossAccountRoleArn, region)
+	}
+	return s, err
+}
+
+func getAssumedSession(baseSess *session.Session, roleArn, region string) (*session.Session, error) {
+	stsSvc := sts.New(baseSess)
+	sessionName := "cross_account_ssm_session"
+	assumedRole, err := stsSvc.AssumeRole(&sts.AssumeRoleInput{
+		RoleArn:         aws.String(roleArn),
+		RoleSessionName: &sessionName,
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return session.NewSession(&aws.Config{
+		Credentials: credentials.NewStaticCredentials(
+			*assumedRole.Credentials.AccessKeyId,
+			*assumedRole.Credentials.SecretAccessKey,
+			*assumedRole.Credentials.SessionToken),
+		Region: aws.String(region),
+	})
 }
